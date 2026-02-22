@@ -2,13 +2,14 @@ import { db } from '@/db';
 import { meals } from '@/db/schema';
 import { GeminiService } from '@/services/gemini';
 import { storage } from '@/utils/storage';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
 import { useEffect, useState } from 'react';
-import { Alert } from 'react-native';
-import { Button, H4, Image, Input, ScrollView, Spinner, Switch, Text, XStack, YStack } from 'tamagui';
-import { useWhisperSTT } from '../utils/whisper';
+import { ActionSheetIOS, Alert, Platform, Image as RNImage } from 'react-native';
+import { Button, H4, Input, ScrollView, Spinner, Text, XStack, YStack } from 'tamagui';
+import { useSpeechRecognition } from '../utils/speech';
 
 // 1. Define a type for your analysis
 interface MealAnalysis {
@@ -24,27 +25,19 @@ export default function LogMealScreen() {
     const params = useLocalSearchParams();
     const router = useRouter();
 
-    const [imageUri, setImageUri] = useState<string | undefined>(params.imageUri as string);
+    const [imageUris, setImageUris] = useState<string[]>(params.imageUri ? [params.imageUri as string] : []);
     const [description, setDescription] = useState('');
     const [loading, setLoading] = useState(false);
     const [analysis, setAnalysis] = useState<MealAnalysis | null>(null);
+    const [interimText, setInterimText] = useState('');
     const {
-        isReady,
         recognizing,
         loadingMsg,
-        modelType,
-        initModel,
         startRecording,
         stopRecording
-    } = useWhisperSTT();
+    } = useSpeechRecognition();
 
     const [isSpeaking, setIsSpeaking] = useState(false);
-
-    const [useSmallModel, setUseSmallModel] = useState(false);
-
-    useEffect(() => {
-        initModel(useSmallModel);
-    }, [useSmallModel]);
 
     // 4. Add cleanup for unmounting
     useEffect(() => {
@@ -73,7 +66,7 @@ export default function LogMealScreen() {
         }
     };
 
-    const pickImage = async () => {
+    const pickImageGallery = async () => {
         let result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsEditing: true,
@@ -82,17 +75,78 @@ export default function LogMealScreen() {
         });
 
         if (!result.canceled) {
-            setImageUri(result.assets[0].uri);
+            setImageUris(prev => [...prev, result.assets[0].uri]);
+        }
+    };
+
+    const pickImageCamera = async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission Denied', 'Camera access is required to take photos.');
+            return;
+        }
+
+        let result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [4, 3],
+            quality: 1,
+        });
+
+        if (!result.canceled) {
+            setImageUris(prev => [...prev, result.assets[0].uri]);
+        }
+    };
+
+    const handleAddPhoto = () => {
+        if (Platform.OS === 'ios') {
+            ActionSheetIOS.showActionSheetWithOptions(
+                {
+                    options: ['Cancel', 'Take Photo', 'Choose from Gallery'],
+                    cancelButtonIndex: 0,
+                },
+                (buttonIndex) => {
+                    if (buttonIndex === 1) {
+                        pickImageCamera();
+                    } else if (buttonIndex === 2) {
+                        pickImageGallery();
+                    }
+                }
+            );
+        } else if (Platform.OS === 'web') {
+            const useCamera = window.confirm('Click OK to Take Photo, or Cancel to open Gallery');
+            if (useCamera) {
+                pickImageCamera();
+            } else {
+                pickImageGallery();
+            }
+        } else {
+            Alert.alert(
+                'Add Photo',
+                'Choose a photo source',
+                [
+                    { text: 'Take Photo', onPress: pickImageCamera },
+                    { text: 'Gallery', onPress: pickImageGallery },
+                    { text: 'Cancel', style: 'cancel' }
+                ]
+            );
         }
     };
 
     const handleRecordToggle = async () => {
         if (recognizing) {
             await stopRecording();
+            if (interimText) {
+                setDescription(prev => (prev ? prev + " " + interimText : interimText));
+                setInterimText('');
+            }
         } else {
+            setInterimText('');
             await startRecording((text, isFinal) => {
+                setInterimText(text);
                 if (isFinal) {
                     setDescription(prev => (prev ? prev + " " + text : text));
+                    setInterimText('');
                 }
             });
         }
@@ -110,7 +164,8 @@ export default function LogMealScreen() {
             }
 
             const service = new GeminiService(storedKey);
-            const result = await service.analyzeMeal(imageUri, description);
+            // Send the first image to Gemini since it accepts a single URI parameter currently
+            const result = await service.analyzeMeal(imageUris[0], description);
 
             if (result.error) {
                 Alert.alert('AI Error', result.error);
@@ -135,9 +190,22 @@ export default function LogMealScreen() {
                 protein: analysis.protein || 0,
                 carbs: analysis.carbs || 0,
                 fat: analysis.fat || 0,
-                imageUri: imageUri,
+                // We no longer store the image URI in SQLite per user request
                 transcription: description,
             });
+
+            // Cleanup: Delete the temporarily cached images from the device to save storage space
+            for (const uri of imageUris) {
+                try {
+                    // Only try to delete local file URIs (not web blobs or already deleted files)
+                    if (uri.startsWith('file://')) {
+                        await FileSystem.deleteAsync(uri, { idempotent: true });
+                    }
+                } catch (cleanupError) {
+                    console.error("Failed to delete cached image:", uri, cleanupError);
+                }
+            }
+
             router.replace('/(tabs)');
         } catch (e) {
             Alert.alert('Error', 'Failed to save meal.');
@@ -150,24 +218,39 @@ export default function LogMealScreen() {
             <YStack gap="$4" paddingBottom="$8">
                 <H4>Log Meal</H4>
 
-                {!imageUri ? (
-                    <YStack gap="$3" borderColor="$borderColor" borderWidth={1} borderRadius="$4" padding="$4" alignItems="center" justifyContent="center" height={200} backgroundColor="$color.gray2">
-                        <Text color="$color.gray11">No image selected</Text>
-                        <XStack gap="$3">
-                            <Button onPress={() => router.push('/camera')} backgroundColor="$blue10">
-                                Take Photo
-                            </Button>
-                            <Button onPress={pickImage} backgroundColor="$gray10">
-                                Gallery
-                            </Button>
-                        </XStack>
-                    </YStack>
-                ) : (
-                    <YStack gap="$2">
-                        <Image source={{ uri: imageUri }} width="100%" height={300} borderRadius="$4" resizeMode="cover" />
-                        <Button onPress={() => setImageUri(undefined)} size="$2" chromeless>Remove Image</Button>
-                    </YStack>
-                )}
+                <YStack gap="$2">
+                    <Text fontWeight="bold">Meal Images</Text>
+                    {imageUris.length > 0 && (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 5 }}>
+                            {imageUris.map((uri, index) => (
+                                <YStack key={index} position="relative">
+                                    <RNImage
+                                        source={{ uri }}
+                                        style={{ width: 80, height: 80, borderRadius: 8, backgroundColor: '#eee' }}
+                                        resizeMode="cover"
+                                    />
+                                    <Button
+                                        size="$2"
+                                        circular
+                                        backgroundColor="$red10"
+                                        position="absolute"
+                                        top={-5}
+                                        right={-5}
+                                        onPress={() => setImageUris(prev => prev.filter((_, i) => i !== index))}
+                                    >
+                                        <Text color="white">X</Text>
+                                    </Button>
+                                </YStack>
+                            ))}
+                        </ScrollView>
+                    )}
+
+                    {imageUris.length < 4 && (
+                        <Button style={{ marginTop: 5 }} onPress={handleAddPhoto} backgroundColor="$blue10" icon={<Text color="white" fontSize="$5">+</Text>}>
+                            Add Photo {imageUris.length > 0 ? `(${imageUris.length}/4)` : ''}
+                        </Button>
+                    )}
+                </YStack>
 
                 <YStack gap="$2">
                     <Text fontWeight="bold">Description (Text or Voice)</Text>
@@ -179,15 +262,11 @@ export default function LogMealScreen() {
                         numberOfLines={3}
                         textAlignVertical="top"
                     />
-                    <XStack alignItems="center" gap="$2" marginTop="$2" marginBottom="$2">
-                        <Switch size="$3" checked={useSmallModel} onCheckedChange={setUseSmallModel}>
-                            <Switch.Thumb />
-                        </Switch>
-                        <YStack>
-                            <Text fontSize="$3">Use 'Small' Model (Slower, More Accurate)</Text>
-                            <Text fontSize="$2" color="$color.gray11">Current: {modelType === 'small' ? 'Small' : 'Tiny.en (Faster, Less Accurate)'}</Text>
-                        </YStack>
-                    </XStack>
+                    {recognizing && interimText ? (
+                        <Text color="$blue10" fontStyle="italic" fontSize="$3">
+                            Listening: {interimText}
+                        </Text>
+                    ) : null}
 
                     {loadingMsg ? (
                         <XStack gap="$2" alignItems="center" padding="$2" backgroundColor="$yellow4" borderRadius="$2">
@@ -198,10 +277,8 @@ export default function LogMealScreen() {
                         <Button
                             backgroundColor={recognizing ? "$red10" : "$blue10"}
                             onPress={handleRecordToggle}
-                            disabled={!isReady}
-                            opacity={!isReady ? 0.5 : 1}
                         >
-                            {recognizing ? 'Stop Recording' : 'Record Voice Description (Private AI)'}
+                            {recognizing ? 'Stop Recording' : 'Record Voice Description'}
                         </Button>
                     )}
                 </YStack>
@@ -229,6 +306,6 @@ export default function LogMealScreen() {
                     </YStack>
                 )}
             </YStack>
-        </ScrollView>
+        </ScrollView >
     );
 }
