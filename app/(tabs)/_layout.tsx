@@ -1,72 +1,64 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { Platform, Pressable, useColorScheme } from 'react-native';
 
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
-import { useColorScheme } from '@/components/useColorScheme';
 import Colors from '@/constants/Colors';
+import { tabTransitionState } from '@/utils/tabTransition';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text, XStack } from 'tamagui';
 
 function CustomPillTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+  const tabRadius = 999;
+  const activeRouteName = state.routes[state.index]?.name;
+
+  if (activeRouteName === 'two') {
+    return null;
+  }
+
   return (
     <XStack
       position="absolute"
-      bottom={Platform.OS === 'ios' ? 30 : 20}
-      left={0}
-      right={0}
+      bottom={Math.max(insets.bottom, Platform.OS === 'ios' ? 14 : 10)}
+      left={12}
+      right={12}
       justifyContent="center"
       alignItems="center"
     >
       <XStack
-        backgroundColor="$background"
-        borderRadius="$10"
-        padding="$2"
+        backgroundColor="$blue10"
+        borderRadius={tabRadius}
         shadowColor="black"
         shadowOffset={{ width: 0, height: 4 }}
         shadowOpacity={0.1}
         shadowRadius={10}
         elevation={5}
-        gap="$2"
-        borderWidth={1}
-        borderColor="$borderColor"
+        width="100%"
+        maxWidth={220}
+        height={42}
       >
-        {state.routes.map((route, index) => {
-          const { options } = descriptors[route.key];
-
-          let label = options.title !== undefined ? options.title : route.name;
-          if (route.name === 'index') label = 'Summary';
-          if (route.name === 'two') label = 'Log Meal';
-
-          const isFocused = state.index === index;
-
-          const onPress = () => {
-            const event = navigation.emit({
-              type: 'tabPress',
-              target: route.key,
-              canPreventDefault: true,
-            });
-
-            if (!isFocused && !event.defaultPrevented) {
-              navigation.navigate(route.name);
-            }
-          };
-
-          return (
-            <Pressable key={route.key} onPress={onPress}>
-              <XStack
-                paddingHorizontal="$4"
-                paddingVertical="$2"
-                borderRadius="$10"
-                backgroundColor={isFocused ? "$blue10" : "transparent"}
-              >
-                <Text color={isFocused ? "white" : "$color"} fontWeight={isFocused ? "bold" : "normal"}>
-                  {label as string}
-                </Text>
-              </XStack>
-            </Pressable>
-          );
-        })}
+        <Pressable
+          onPress={() => {
+            tabTransitionState.fromSummaryToLog = true;
+            navigation.navigate('two');
+          }}
+          style={{
+            flex: 1,
+            borderRadius: tabRadius,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <Text
+            color="white"
+            fontWeight="bold"
+            fontSize="$3"
+            numberOfLines={1}
+          >
+            Log Meal
+          </Text>
+        </Pressable>
       </XStack>
     </XStack>
   );
@@ -80,7 +72,7 @@ export default function TabLayout() {
       tabBar={(props) => <CustomPillTabBar {...props} />}
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: useClientOnlyValue(false, true),
+        headerShown: false,
       }}>
       <Tabs.Screen
         name="index"

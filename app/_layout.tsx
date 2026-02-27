@@ -5,8 +5,9 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { useColorScheme } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import 'react-native-reanimated';
-import { TamaguiProvider } from 'tamagui';
+import { PortalProvider, TamaguiProvider } from 'tamagui';
 import tamaguiConfig from '../tamagui.config';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -33,14 +34,18 @@ export default function RootLayout() {
 
   return (
     <TamaguiProvider config={tamaguiConfig} defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}>
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="+not-found" />
-          </Stack>
-        </ThemeProvider>
-      </QueryClientProvider>
+      <PortalProvider>
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
+              <Stack>
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="+not-found" />
+              </Stack>
+            </KeyboardProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
+      </PortalProvider>
     </TamaguiProvider>
   );
 }

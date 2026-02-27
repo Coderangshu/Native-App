@@ -53,12 +53,12 @@ export default function SettingsScreen() {
             <XStack alignItems="center" justifyContent="space-between">
                 <Label>Dark Mode</Label>
                 <Switch checked={isDarkMode} onCheckedChange={setIsDarkMode}>
-                    <Switch.Thumb animation="quicker" />
+                    <Switch.Thumb />
                 </Switch>
             </XStack>
 
-            <Button onPress={saveSettings} backgroundColor="$blue10" color="white">
-                Save Settings
+            <Button onPress={saveSettings} backgroundColor="$blue10">
+                <Text color="white">Save Settings</Text>
             </Button>
         </YStack>
     );
