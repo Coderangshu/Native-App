@@ -10,26 +10,37 @@ export class GeminiService {
         this.client = new GoogleGenAI({ apiKey });
     }
 
-    async analyzeMeal(imageUri?: string, textDescription?: string) {
+    async analyzeMeal(imageUri?: string, textDescription?: string, modelName: string = 'gemini-2.5-flash') {
         const usageParts: any[] = [];
 
-        // Prompt structure for new SDK
-        usageParts.push({
-            text: `
-      Analyze this meal. Return a JSON object with the following fields:
-      - name: Short descriptive name of the meal
-      - calories: Total estimated calories (integer)
-      - protein: Protein in grams (integer)
-      - carbs: Carbs in grams (integer)
-      - fat: Fat in grams (integer)
-      - macros: breakdown of micronutrients if possible
-      
-      If the image or text is not food related, return { "error": "Not food" }.
-      Do not use Markdown code blocks in the response. Just the raw JSON string.
-    `});
+        const systemPrompt = `
+You are an expert nutritional analysis assistant. Analyze the provided text description, image, or both, to determine the nutritional content.
+
+INPUT HANDLING & PORTION ESTIMATION:
+1. Nutrition Labels/Charts: If the image is of a Nutrition Facts label or chart, DO NOT guess. Extract the exact values written on the label. If the user specifies a quantity, multiply the values accordingly.
+2. Food Images: If an image of food is provided, actively look for reference objects (e.g., forks, hands, cups, or plate edges) to estimate the physical volume and weight.
+3. Text Only / No Reference: If no reference objects are visible, or if only text is provided without specific weights, estimate the quantity based on typical standard serving sizes.
+
+OUTPUT FORMAT:
+Return ONLY a raw, valid JSON object. Do NOT use Markdown formatting or code blocks.
+If the text or image is NOT food-related and NOT a nutrition label, return exactly: {"error": "Not food"}
+
+Otherwise, return this exact structure (use 0 for unknowns):
+{
+  "name": "Short descriptive name",
+  "portion_assumed": "The quantity/size you based your estimates on",
+  "calories": 0,
+  "macros": { "protein_g": 0, "carbs_g": 0, "fat_g": 0 },
+  "minerals": { "sodium_mg": 0, "calcium_mg": 0, "iron_mg": 0, "potassium_mg": 0, "magnesium_mg": 0, "zinc_mg": 0, "phosphorus_mg": 0 },
+  "vitamins": { "vitamin_a_mcg": 0, "vitamin_b12_mcg": 0, "vitamin_c_mg": 0, "vitamin_d_mcg": 0, "vitamin_e_mg": 0, "vitamin_k_mcg": 0 },
+  "data_source": "State either 'Estimated from photo/text' or 'Extracted from nutrition label'",
+  "confidence_score": 0
+}`;
+
+        usageParts.push({ text: systemPrompt });
 
         if (textDescription) {
-            usageParts.push({ text: `User description: ${textDescription}` });
+            usageParts.push({ text: `User input: ${textDescription}` });
         }
 
         if (imageUri) {
@@ -39,7 +50,7 @@ export class GeminiService {
                 const blob = await response.blob();
                 base64 = await new Promise((resolve) => {
                     const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result?.toString().split(',')[1]); // remove data:image/jpeg;base64,
+                    reader.onloadend = () => resolve(reader.result?.toString().split(',')[1]);
                     reader.readAsDataURL(blob);
                 });
             } else {
@@ -56,29 +67,40 @@ export class GeminiService {
 
         try {
             const result = await this.client.models.generateContent({
-                // model: 'gemini-2.5-flash',
-                // model: 'gemini-3-flash-preview',
-                model: 'gemini-2.5-flash-lite',
-                contents: [{ parts: usageParts }]
+                model: modelName,
+                contents: [{ parts: usageParts }],
+                config: {
+                    responseMimeType: "application/json",
+                    temperature: 0.1, // Low temperature means less hallucination, more consistent data extraction
+                }
             });
 
-            console.log("Gemini Result:", JSON.stringify(result, null, 2));
-            // Try different ways to access text based on SDK version
-            let responseText = null;
-            if (typeof result.text === 'function') {
-                responseText = (result as any).text();
-            } else if (result.candidates && result.candidates.length > 0 && result.candidates[0].content?.parts && result.candidates[0].content.parts.length > 0) {
-                // @ts-ignore
+            // Extract text from the new SDK structure
+            let responseText = result.text || "";
+
+            // Fallback for tricky SDK updates just in case
+            if (!responseText && result.candidates?.[0]?.content?.parts?.[0]?.text) {
                 responseText = result.candidates[0].content.parts[0].text;
             }
 
             if (!responseText) throw new Error("No response text from AI");
 
-            // Clean up markdown if present
+            // Even with responseMimeType, it's good to sanitize just in case
             const jsonStr = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
             return JSON.parse(jsonStr);
-        } catch (error) {
+
+        } catch (error: any) {
             console.error("Gemini Error:", error);
+
+            // Check for Google's HTTP 429 Rate Limit / Quota Exceeded error
+            if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('ResourceExhausted') || error?.message?.includes('quota')) {
+                const customError = new Error("QUOTA_EXCEEDED");
+                customError.name = "QuotaExceededError";
+                throw customError; // Throw this so the UI screen can catch it
+            }
+
+            // Throw generic errors normally
             throw error;
         }
     }

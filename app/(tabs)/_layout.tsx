@@ -1,18 +1,75 @@
+import { Tabs } from 'expo-router';
 import React from 'react';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Link, Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
+import { Platform, Pressable } from 'react-native';
 
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
 import { useClientOnlyValue } from '@/components/useClientOnlyValue';
+import { useColorScheme } from '@/components/useColorScheme';
+import Colors from '@/constants/Colors';
+import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { Text, XStack } from 'tamagui';
 
-// You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
-function TabBarIcon(props: {
-  name: React.ComponentProps<typeof FontAwesome>['name'];
-  color: string;
-}) {
-  return <FontAwesome size={28} style={{ marginBottom: -3 }} {...props} />;
+function CustomPillTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  return (
+    <XStack
+      position="absolute"
+      bottom={Platform.OS === 'ios' ? 30 : 20}
+      left={0}
+      right={0}
+      justifyContent="center"
+      alignItems="center"
+    >
+      <XStack
+        backgroundColor="$background"
+        borderRadius="$10"
+        padding="$2"
+        shadowColor="black"
+        shadowOffset={{ width: 0, height: 4 }}
+        shadowOpacity={0.1}
+        shadowRadius={10}
+        elevation={5}
+        gap="$2"
+        borderWidth={1}
+        borderColor="$borderColor"
+      >
+        {state.routes.map((route, index) => {
+          const { options } = descriptors[route.key];
+
+          let label = options.title !== undefined ? options.title : route.name;
+          if (route.name === 'index') label = 'Summary';
+          if (route.name === 'two') label = 'Log Meal';
+
+          const isFocused = state.index === index;
+
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name);
+            }
+          };
+
+          return (
+            <Pressable key={route.key} onPress={onPress}>
+              <XStack
+                paddingHorizontal="$4"
+                paddingVertical="$2"
+                borderRadius="$10"
+                backgroundColor={isFocused ? "$blue10" : "transparent"}
+              >
+                <Text color={isFocused ? "white" : "$color"} fontWeight={isFocused ? "bold" : "normal"}>
+                  {label as string}
+                </Text>
+              </XStack>
+            </Pressable>
+          );
+        })}
+      </XStack>
+    </XStack>
+  );
 }
 
 export default function TabLayout() {
@@ -20,38 +77,23 @@ export default function TabLayout() {
 
   return (
     <Tabs
+      tabBar={(props) => <CustomPillTabBar {...props} />}
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        // Disable the static render of the header on web
-        // to prevent a hydration error in React Navigation v6.
         headerShown: useClientOnlyValue(false, true),
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Tab One',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable>
-                {({ pressed }) => (
-                  <FontAwesome
-                    name="info-circle"
-                    size={25}
-                    color={Colors[colorScheme ?? 'light'].text}
-                    style={{ marginRight: 15, opacity: pressed ? 0.5 : 1 }}
-                  />
-                )}
-              </Pressable>
-            </Link>
-          ),
+          headerShown: false,
+          title: 'Summary',
         }}
       />
       <Tabs.Screen
         name="two"
         options={{
-          title: 'Tab Two',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
+          headerShown: false,
+          title: 'Log Meal',
         }}
       />
     </Tabs>
